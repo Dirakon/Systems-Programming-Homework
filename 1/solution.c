@@ -16,17 +16,17 @@ struct single_sorted_file_data {
     int *sorted_numbers;
 };
 
-void coro_yield_with_respect_to_quantum(struct timespec *coro_start, int quantum_limit) {
+void coro_yield_with_respect_to_quantum(struct timespec *coro_start, int quantum_soft_limit) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     long time_spent_this_run = now.tv_nsec - coro_start->tv_nsec;
-    if (time_spent_this_run >= quantum_limit) {
+    if (time_spent_this_run >= quantum_soft_limit) {
         coro_yield();
         clock_gettime(CLOCK_MONOTONIC, coro_start);
     }
 }
 
-int quick_sort_partition(int number_count, int *numbers, struct timespec *coro_start, int quantum_limit) {
+int quick_sort_partition(int number_count, int *numbers, struct timespec *coro_start, int quantum_soft_limit) {
     int pivot_value = numbers[number_count - 1];
     int pivot_index = 0;
     for (int i = 0; i < number_count; ++i) {
@@ -36,28 +36,28 @@ int quick_sort_partition(int number_count, int *numbers, struct timespec *coro_s
             numbers[pivot_index] = temp;
             pivot_index++;
         }
-        coro_yield_with_respect_to_quantum(coro_start, quantum_limit);
+        coro_yield_with_respect_to_quantum(coro_start, quantum_soft_limit);
     }
     return pivot_index - 1;
 
 }
 
-int *get_sorted_inplace_numbers(int number_count, int *numbers, struct timespec *coro_start, int quantum_limit) {
+int *get_sorted_inplace_numbers(int number_count, int *numbers, struct timespec *coro_start, int quantum_soft_limit) {
     if (number_count <= 1)
         return numbers;
-    int pivot_index = quick_sort_partition(number_count, numbers, coro_start, quantum_limit);
-    get_sorted_inplace_numbers(pivot_index, numbers, coro_start, quantum_limit);
-    get_sorted_inplace_numbers(number_count - pivot_index, numbers + pivot_index, coro_start, quantum_limit);
+    int pivot_index = quick_sort_partition(number_count, numbers, coro_start, quantum_soft_limit);
+    get_sorted_inplace_numbers(pivot_index, numbers, coro_start, quantum_soft_limit);
+    get_sorted_inplace_numbers(number_count - pivot_index, numbers + pivot_index, coro_start, quantum_soft_limit);
 
     return numbers;
 }
 
 struct single_sorted_file_data *
-get_sorted_inplace_file_data(int number_count, int *numbers, struct timespec *coro_start, int quantum_limit) {
+get_sorted_inplace_file_data(int number_count, int *numbers, struct timespec *coro_start, int quantum_soft_limit) {
     struct single_sorted_file_data *data = malloc(sizeof(struct single_sorted_file_data));
 
     data->number_count = number_count;
-    data->sorted_numbers = get_sorted_inplace_numbers(number_count, numbers, coro_start, quantum_limit);
+    data->sorted_numbers = get_sorted_inplace_numbers(number_count, numbers, coro_start, quantum_soft_limit);
 
     return data;
 }
@@ -81,7 +81,7 @@ struct file_queue *create_file_queue(int file_count, char **file_names) {
     queue->file_count = file_count;
     queue->file_ptr = 0;
     queue->file_names = malloc(sizeof(char *) * file_count);
-    queue->sorted_files = malloc(sizeof(struct single_sorted_file_data) * file_count);
+    queue->sorted_files = malloc(sizeof(struct single_sorted_file_data *) * file_count);
     for (int i = 0; i < file_count; ++i) {
         queue->file_names[i] = file_names[i];
         queue->sorted_files[i] = NULL;
@@ -102,18 +102,18 @@ void dispose_of_file_queue(struct file_queue *queue) {
 
 
 struct coroutine_data {
-    int quantum;
+    int quantum_soft_limit;
     char *name;
     struct file_queue *shared_file_queue;
     struct timespec start_timespec;
 };
 
 
-struct coroutine_data *create_coroutine_data(char *name, int quantum, struct file_queue *shared_file_queue) {
+struct coroutine_data *create_coroutine_data(char *name, int quantum_soft_limit, struct file_queue *shared_file_queue) {
     struct coroutine_data *data = malloc(sizeof(struct coroutine_data));
 
     data->name = name;
-    data->quantum = quantum;
+    data->quantum_soft_limit = quantum_soft_limit;
     data->shared_file_queue = shared_file_queue;
 
     return data;
@@ -127,17 +127,17 @@ void dispose_of_coroutine_data(struct coroutine_data *data) {
 
 int count_numbers_in_file(char *file_name) {
     FILE *fp = fopen(file_name, "r");
-    int numbers = 0;
+    int number_count = 0;
 
     int dummy_number;
 
     while (fscanf(fp, "%d", &dummy_number) == 1) {
-        numbers++;
+        number_count++;
     }
 
     // after being done with fp
     fclose(fp);
-    return numbers;
+    return number_count;
 }
 
 int *get_numbers_in_file(char *file_name, int number_count) {
@@ -174,7 +174,7 @@ coroutine_func_f(void *coroutine_data) {
         printf("coroutine %s starts sorting file %s\n", data->name, file_name);
         data->shared_file_queue->sorted_files[file_ptr] = get_sorted_inplace_file_data(number_count, numbers,
                                                                                        &data->start_timespec,
-                                                                                       data->quantum);
+                                                                                       data->quantum_soft_limit);
         printf("coroutine %s finishes sorting file %s\n", data->name, file_name);
     }
     printf("coroutine %s finished execution\n", data->name);
@@ -213,9 +213,9 @@ void output_merged_sorted_numbers_to_file(const struct file_queue *shared_file_q
 
 int
 main(int argc, char **argv) {
-    const int non_file_name_cli_arguments = 3;
+    const int non_file_name_cli_arguments_count = 3;
 
-    // argv[0] is the executable
+    /* argv[0] is the executable */
     int target_latency;
     sscanf(argv[1], "%i", &target_latency);
     int coroutine_count;
@@ -223,8 +223,8 @@ main(int argc, char **argv) {
     int quantum = target_latency / coroutine_count;
 
     struct file_queue *shared_file_queue = create_file_queue(
-            argc - non_file_name_cli_arguments,
-            argv + non_file_name_cli_arguments
+            argc - non_file_name_cli_arguments_count,
+            argv + non_file_name_cli_arguments_count
     );
 
 
@@ -250,7 +250,7 @@ main(int argc, char **argv) {
     }
     /* All coroutines have finished. */
 
-    FILE *fp = fopen("goal.txt", "w");
+    FILE *fp = fopen("tests_merged.txt", "w");
     output_merged_sorted_numbers_to_file(shared_file_queue, fp);
     fclose(fp);
 

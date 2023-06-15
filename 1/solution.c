@@ -11,22 +11,112 @@
  * $> ./a.out
  */
 
+const long nsec_in_sec = 1000000000;
+const long nsec_in_ms = 1000000;
+
+/*
+ * Based on https://stackoverflow.com/a/68804612
+ */
+struct timespec diff_timespec(const struct timespec time1,
+                              const struct timespec time0) {
+    struct timespec diff = {.tv_sec = time1.tv_sec - time0.tv_sec,
+            .tv_nsec = time1.tv_nsec - time0.tv_nsec};
+    if (diff.tv_nsec < 0) {
+        diff.tv_nsec += nsec_in_sec;
+        diff.tv_sec--;
+    }
+    return diff;
+}
+
+struct timespec add_timespec(const struct timespec time1,
+                             const struct timespec time0) {
+    struct timespec addition = {.tv_sec = time1.tv_sec + time0.tv_sec,
+            .tv_nsec = time1.tv_nsec + time0.tv_nsec};
+    if (addition.tv_nsec >= nsec_in_sec) {
+        addition.tv_nsec -= nsec_in_sec;
+        addition.tv_sec++;
+    }
+    return addition;
+}
+
+bool gte_timespec(const struct timespec time1,
+                  const struct timespec time0) {
+    if (time1.tv_sec > time0.tv_sec)
+        return true;
+    if (time1.tv_sec < time0.tv_sec)
+        return false;
+    if (time1.tv_nsec > time0.tv_nsec)
+        return true;
+    if (time1.tv_nsec < time0.tv_nsec)
+        return false;
+    return true;
+}
+
+struct timespec ms_to_timespec(long long ms) {
+    long long nsec = ms * nsec_in_ms;
+    struct timespec spec = {.tv_sec = nsec / nsec_in_sec,
+            .tv_nsec = nsec % nsec_in_sec};
+    return spec;
+}
+
+double timespec_to_sec(struct timespec time) {
+    double sec = (double) time.tv_sec;
+    sec += ((double) time.tv_nsec) / ((double) nsec_in_sec);
+    return sec;
+}
+
+
+struct file_queue;
+
+
+struct coroutine_context {
+    char *name;
+    struct file_queue *shared_file_queue;
+    int context_switch_count;
+
+    struct timespec start_timespec;
+    struct timespec quantum_soft_limit;
+    struct timespec time_working;
+};
+
+
+struct coroutine_context *
+create_coroutine_context(char *name, int quantum_soft_limit_ms, struct file_queue *shared_file_queue) {
+    struct coroutine_context *context = malloc(sizeof(struct coroutine_context));
+
+    context->name = name;
+    context->quantum_soft_limit = ms_to_timespec(quantum_soft_limit_ms);
+    context->shared_file_queue = shared_file_queue;
+    struct timespec time_working = {.tv_sec = 0, .tv_nsec = 0};
+    context->time_working = time_working;
+    context->context_switch_count = 0;
+
+    return context;
+}
+
+void dispose_of_coroutine_context(struct coroutine_context *context) {
+    free(context->name);
+    free(context);
+}
+
 struct single_sorted_file_data {
     int number_count;
     int *sorted_numbers;
 };
 
-void coro_yield_with_respect_to_quantum(struct timespec *coro_start, int quantum_soft_limit) {
+void coro_yield_with_respect_to_quantum(struct coroutine_context *context) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    long time_spent_this_run = now.tv_nsec - coro_start->tv_nsec;
-    if (time_spent_this_run >= quantum_soft_limit) {
+    struct timespec time_spent_this_run = diff_timespec(now, context->start_timespec);
+    if (gte_timespec(time_spent_this_run, context->quantum_soft_limit)) {
+        context->context_switch_count += 1;
+        context->time_working = add_timespec(context->time_working, time_spent_this_run);
         coro_yield();
-        clock_gettime(CLOCK_MONOTONIC, coro_start);
+        clock_gettime(CLOCK_MONOTONIC, &context->start_timespec);
     }
 }
 
-int quick_sort_partition(int number_count, int *numbers, struct timespec *coro_start, int quantum_soft_limit) {
+int quick_sort_partition(int number_count, int *numbers, struct coroutine_context *context) {
     int pivot_value = numbers[number_count - 1];
     int pivot_index = 0;
     for (int i = 0; i < number_count; ++i) {
@@ -36,28 +126,28 @@ int quick_sort_partition(int number_count, int *numbers, struct timespec *coro_s
             numbers[pivot_index] = temp;
             pivot_index++;
         }
-        coro_yield_with_respect_to_quantum(coro_start, quantum_soft_limit);
+        coro_yield_with_respect_to_quantum(context);
     }
     return pivot_index - 1;
 
 }
 
-int *get_sorted_inplace_numbers(int number_count, int *numbers, struct timespec *coro_start, int quantum_soft_limit) {
+int *get_sorted_inplace_numbers(int number_count, int *numbers, struct coroutine_context *context) {
     if (number_count <= 1)
         return numbers;
-    int pivot_index = quick_sort_partition(number_count, numbers, coro_start, quantum_soft_limit);
-    get_sorted_inplace_numbers(pivot_index, numbers, coro_start, quantum_soft_limit);
-    get_sorted_inplace_numbers(number_count - pivot_index, numbers + pivot_index, coro_start, quantum_soft_limit);
+    int pivot_index = quick_sort_partition(number_count, numbers, context);
+    get_sorted_inplace_numbers(pivot_index, numbers, context);
+    get_sorted_inplace_numbers(number_count - pivot_index, numbers + pivot_index, context);
 
     return numbers;
 }
 
 struct single_sorted_file_data *
-get_sorted_inplace_file_data(int number_count, int *numbers, struct timespec *coro_start, int quantum_soft_limit) {
+get_sorted_inplace_file_data(int number_count, int *numbers, struct coroutine_context *context) {
     struct single_sorted_file_data *data = malloc(sizeof(struct single_sorted_file_data));
 
     data->number_count = number_count;
-    data->sorted_numbers = get_sorted_inplace_numbers(number_count, numbers, coro_start, quantum_soft_limit);
+    data->sorted_numbers = get_sorted_inplace_numbers(number_count, numbers, context);
 
     return data;
 }
@@ -101,30 +191,6 @@ void dispose_of_file_queue(struct file_queue *queue) {
 }
 
 
-struct coroutine_data {
-    int quantum_soft_limit;
-    char *name;
-    struct file_queue *shared_file_queue;
-    struct timespec start_timespec;
-};
-
-
-struct coroutine_data *create_coroutine_data(char *name, int quantum_soft_limit, struct file_queue *shared_file_queue) {
-    struct coroutine_data *data = malloc(sizeof(struct coroutine_data));
-
-    data->name = name;
-    data->quantum_soft_limit = quantum_soft_limit;
-    data->shared_file_queue = shared_file_queue;
-
-    return data;
-}
-
-void dispose_of_coroutine_data(struct coroutine_data *data) {
-    free(data->name);
-    free(data);
-}
-
-
 int count_numbers_in_file(char *file_name) {
     FILE *fp = fopen(file_name, "r");
     int number_count = 0;
@@ -157,33 +223,40 @@ int *get_numbers_in_file(char *file_name, int number_count) {
  * implement your solution, sort each individual file.
  */
 static int
-coroutine_func_f(void *coroutine_data) {
+coroutine_func_f(void *coroutine_context) {
     struct coro *this = coro_this();
-    struct coroutine_data *data = coroutine_data;
-    printf("coroutine %s starts\n", data->name);
-    clock_gettime(CLOCK_MONOTONIC, &data->start_timespec);
+    struct coroutine_context *context = coroutine_context;
+    printf("coroutine %s starts\n", context->name);
+    clock_gettime(CLOCK_MONOTONIC, &context->start_timespec);
 
-    while (data->shared_file_queue->file_ptr < data->shared_file_queue->file_count) {
-        int file_ptr = data->shared_file_queue->file_ptr;
-        data->shared_file_queue->file_ptr++;
+    while (context->shared_file_queue->file_ptr < context->shared_file_queue->file_count) {
+        int file_ptr = context->shared_file_queue->file_ptr;
+        context->shared_file_queue->file_ptr++;
 
-        char *file_name = data->shared_file_queue->file_names[file_ptr];
+        char *file_name = context->shared_file_queue->file_names[file_ptr];
         int number_count = count_numbers_in_file(file_name);
         int *numbers = get_numbers_in_file(file_name, number_count);
 
-        printf("coroutine %s starts sorting file %s\n", data->name, file_name);
-        data->shared_file_queue->sorted_files[file_ptr] = get_sorted_inplace_file_data(number_count, numbers,
-                                                                                       &data->start_timespec,
-                                                                                       data->quantum_soft_limit);
-        printf("coroutine %s finishes sorting file %s\n", data->name, file_name);
+        printf("coroutine %s starts sorting file %s\n", context->name, file_name);
+        context->shared_file_queue->sorted_files[file_ptr] = get_sorted_inplace_file_data(number_count, numbers,
+                                                                                          context);
+        printf("coroutine %s finishes sorting file %s\n", context->name, file_name);
     }
-    printf("coroutine %s finished execution\n", data->name);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    struct timespec last_diff = diff_timespec(now, context->start_timespec);
+    context->time_working = add_timespec(context->time_working, last_diff);
+    printf("coroutine %s finished execution (context switches: %d; sec spent total: %f)\n", context->name,
+           context->context_switch_count, timespec_to_sec(context->time_working));
 
-    dispose_of_coroutine_data(coroutine_data);
+    dispose_of_coroutine_context(coroutine_context);
     return 0;
 }
 
 void output_merged_sorted_numbers_to_file(const struct file_queue *shared_file_queue, FILE *fp) {
+    struct timespec merge_start;
+    clock_gettime(CLOCK_MONOTONIC, &merge_start);
+
     printf("started merging\n");
     int *file_ptr_to_current_number_ptr = malloc(sizeof(int) * shared_file_queue->file_count);
     for (int file_ptr = 0; file_ptr < shared_file_queue->file_count; ++file_ptr)
@@ -209,10 +282,17 @@ void output_merged_sorted_numbers_to_file(const struct file_queue *shared_file_q
     }
     free(file_ptr_to_current_number_ptr);
     printf("finished merging\n");
+
+    struct timespec merge_end;
+    clock_gettime(CLOCK_MONOTONIC, &merge_end);
+    printf("total merge time (sec): %f\n", timespec_to_sec(diff_timespec(merge_end, merge_start)));
 }
 
 int
 main(int argc, char **argv) {
+    struct timespec program_start;
+    clock_gettime(CLOCK_MONOTONIC, &program_start);
+
     const int non_file_name_cli_arguments_count = 3;
 
     /* argv[0] is the executable */
@@ -234,8 +314,9 @@ main(int argc, char **argv) {
     for (int i = 0; i < coroutine_count; ++i) {
         char name[16];
         sprintf(name, "coro_%d", i);
-        struct coroutine_data *coroutine_data = create_coroutine_data(strdup(name), quantum, shared_file_queue);
-        coro_new(coroutine_func_f, coroutine_data);
+        struct coroutine_context *coroutine_context = create_coroutine_context(strdup(name), quantum,
+                                                                               shared_file_queue);
+        coro_new(coroutine_func_f, coroutine_context);
     }
     /* Wait for all the coroutines to end. */
     struct coro *c;
@@ -256,6 +337,9 @@ main(int argc, char **argv) {
 
     dispose_of_file_queue(shared_file_queue);
 
+    struct timespec program_end;
+    clock_gettime(CLOCK_MONOTONIC, &program_end);
+    printf("total work time (sec): %f\n", timespec_to_sec(diff_timespec(program_end, program_start)));
+
     return 0;
 }
-

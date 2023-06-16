@@ -13,6 +13,7 @@
 
 const long nsec_in_sec = 1000000000;
 const long nsec_in_ms = 1000000;
+const long ms_in_sec = 1000;
 
 /*
  * Based on https://stackoverflow.com/a/68804612
@@ -52,17 +53,22 @@ bool gte_timespec(const struct timespec time1,
     return true;
 }
 
+
+double timespec_to_sec(struct timespec time) {
+    double sec = (double) time.tv_sec;
+    sec += ((double) time.tv_nsec) / ((double) nsec_in_sec);
+    return sec;
+}
 struct timespec ms_to_timespec(long long ms) {
     long long nsec = ms * nsec_in_ms;
     struct timespec spec = {.tv_sec = nsec / nsec_in_sec,
             .tv_nsec = nsec % nsec_in_sec};
     return spec;
 }
-
-double timespec_to_sec(struct timespec time) {
-    double sec = (double) time.tv_sec;
-    sec += ((double) time.tv_nsec) / ((double) nsec_in_sec);
-    return sec;
+long long timespec_to_ms(struct timespec time) {
+    long long ms = time.tv_sec * ms_in_sec;
+    ms += time.tv_nsec/nsec_in_ms;
+    return ms;
 }
 
 
@@ -116,6 +122,9 @@ void coro_yield_with_respect_to_quantum(struct coroutine_context *context) {
     }
 }
 
+/*
+ * Based on https://textbooks.cs.ksu.edu/cc310/7-searching-and-sorting/19-quicksort-pseudocode/
+ */
 int quick_sort_partition(int number_count, int *numbers, struct coroutine_context *context) {
     int pivot_value = numbers[number_count - 1];
     int pivot_index = 0;
@@ -132,13 +141,15 @@ int quick_sort_partition(int number_count, int *numbers, struct coroutine_contex
 
 }
 
+/*
+ * Based on https://textbooks.cs.ksu.edu/cc310/7-searching-and-sorting/19-quicksort-pseudocode/
+ */
 int *get_sorted_inplace_numbers(int number_count, int *numbers, struct coroutine_context *context) {
     if (number_count <= 1)
         return numbers;
     int pivot_index = quick_sort_partition(number_count, numbers, context);
     get_sorted_inplace_numbers(pivot_index, numbers, context);
     get_sorted_inplace_numbers(number_count - pivot_index, numbers + pivot_index, context);
-
     return numbers;
 }
 
@@ -224,7 +235,6 @@ int *get_numbers_in_file(char *file_name, int number_count) {
  */
 static int
 coroutine_func_f(void *coroutine_context) {
-    struct coro *this = coro_this();
     struct coroutine_context *context = coroutine_context;
     printf("coroutine %s starts\n", context->name);
     clock_gettime(CLOCK_MONOTONIC, &context->start_timespec);
@@ -237,7 +247,7 @@ coroutine_func_f(void *coroutine_context) {
         int number_count = count_numbers_in_file(file_name);
         int *numbers = get_numbers_in_file(file_name, number_count);
 
-        printf("coroutine %s starts sorting file %s\n", context->name, file_name);
+        printf("coroutine %s starts sorting file %s (%d numbers detected)\n", context->name, file_name, number_count);
         context->shared_file_queue->sorted_files[file_ptr] = get_sorted_inplace_file_data(number_count, numbers,
                                                                                           context);
         printf("coroutine %s finishes sorting file %s\n", context->name, file_name);
@@ -246,8 +256,8 @@ coroutine_func_f(void *coroutine_context) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     struct timespec last_diff = diff_timespec(now, context->start_timespec);
     context->time_working = add_timespec(context->time_working, last_diff);
-    printf("coroutine %s finished execution (context switches: %d; sec spent total: %f)\n", context->name,
-           context->context_switch_count, timespec_to_sec(context->time_working));
+    printf("coroutine %s finished execution (context switches: %d; ms spent total: %lld)\n", context->name,
+           context->context_switch_count, timespec_to_ms(context->time_working));
 
     dispose_of_coroutine_context(coroutine_context);
     return 0;
@@ -285,7 +295,7 @@ void output_merged_sorted_numbers_to_file(const struct file_queue *shared_file_q
 
     struct timespec merge_end;
     clock_gettime(CLOCK_MONOTONIC, &merge_end);
-    printf("total merge time (sec): %f\n", timespec_to_sec(diff_timespec(merge_end, merge_start)));
+    printf("total merge time (ms): %lld\n", timespec_to_ms(diff_timespec(merge_end, merge_start)));
 }
 
 int
@@ -331,7 +341,7 @@ main(int argc, char **argv) {
     }
     /* All coroutines have finished. */
 
-    FILE *fp = fopen("tests_merged.txt", "w");
+    FILE *fp = fopen("merged_tests.txt", "w");
     output_merged_sorted_numbers_to_file(shared_file_queue, fp);
     fclose(fp);
 
@@ -339,7 +349,7 @@ main(int argc, char **argv) {
 
     struct timespec program_end;
     clock_gettime(CLOCK_MONOTONIC, &program_end);
-    printf("total work time (sec): %f\n", timespec_to_sec(diff_timespec(program_end, program_start)));
+    printf("total work time (ms): %lld\n", timespec_to_ms(diff_timespec(program_end, program_start)));
 
     return 0;
 }

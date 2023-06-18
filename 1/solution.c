@@ -12,16 +12,20 @@
  */
 
 const long nsec_in_sec = 1000000000;
-const long nsec_in_ms = 1000000;
-const long ms_in_sec = 1000;
+
+const long nsec_in_milliseconds = 1000000;
+const long milliseconds_in_sec = 1000;
+
+const long nsec_in_microseconds = 1000;
+const long microseconds_in_sec = 1000000;
 
 /*
  * Based on https://stackoverflow.com/a/68804612
  */
-struct timespec diff_timespec(const struct timespec time1,
-                              const struct timespec time0) {
-    struct timespec diff = {.tv_sec = time1.tv_sec - time0.tv_sec,
-            .tv_nsec = time1.tv_nsec - time0.tv_nsec};
+struct timespec diff_timespec(const struct timespec spec1,
+                              const struct timespec spec2) {
+    struct timespec diff = {.tv_sec = spec1.tv_sec - spec2.tv_sec,
+            .tv_nsec = spec1.tv_nsec - spec2.tv_nsec};
     if (diff.tv_nsec < 0) {
         diff.tv_nsec += nsec_in_sec;
         diff.tv_sec--;
@@ -29,10 +33,10 @@ struct timespec diff_timespec(const struct timespec time1,
     return diff;
 }
 
-struct timespec add_timespec(const struct timespec time1,
-                             const struct timespec time0) {
-    struct timespec addition = {.tv_sec = time1.tv_sec + time0.tv_sec,
-            .tv_nsec = time1.tv_nsec + time0.tv_nsec};
+struct timespec add_timespec(const struct timespec spec1,
+                             const struct timespec spec2) {
+    struct timespec addition = {.tv_sec = spec1.tv_sec + spec2.tv_sec,
+            .tv_nsec = spec1.tv_nsec + spec2.tv_nsec};
     if (addition.tv_nsec >= nsec_in_sec) {
         addition.tv_nsec -= nsec_in_sec;
         addition.tv_sec++;
@@ -40,34 +44,49 @@ struct timespec add_timespec(const struct timespec time1,
     return addition;
 }
 
-bool gte_timespec(const struct timespec time1,
-                  const struct timespec time0) {
-    if (time1.tv_sec > time0.tv_sec)
+bool gte_timespec(const struct timespec spec1,
+                  const struct timespec spec2) {
+    if (spec1.tv_sec > spec2.tv_sec)
         return true;
-    if (time1.tv_sec < time0.tv_sec)
+    if (spec1.tv_sec < spec2.tv_sec)
         return false;
-    if (time1.tv_nsec > time0.tv_nsec)
+    if (spec1.tv_nsec > spec2.tv_nsec)
         return true;
-    if (time1.tv_nsec < time0.tv_nsec)
+    if (spec1.tv_nsec < spec2.tv_nsec)
         return false;
     return true;
 }
 
 
-double timespec_to_sec(struct timespec time) {
-    double sec = (double) time.tv_sec;
-    sec += ((double) time.tv_nsec) / ((double) nsec_in_sec);
+double timespec_to_sec(struct timespec spec) {
+    double sec = (double) spec.tv_sec;
+    sec += ((double) spec.tv_nsec) / ((double) nsec_in_sec);
     return sec;
 }
-struct timespec ms_to_timespec(long long ms) {
-    long long nsec = ms * nsec_in_ms;
+
+struct timespec milliseconds_to_timespec(long long ms) {
+    long long nsec = ms * nsec_in_milliseconds;
     struct timespec spec = {.tv_sec = nsec / nsec_in_sec,
             .tv_nsec = nsec % nsec_in_sec};
     return spec;
 }
-long long timespec_to_ms(struct timespec time) {
-    long long ms = time.tv_sec * ms_in_sec;
-    ms += time.tv_nsec/nsec_in_ms;
+
+long long timespec_to_milliseconds(struct timespec time) {
+    long long ms = time.tv_sec * milliseconds_in_sec;
+    ms += time.tv_nsec / nsec_in_milliseconds;
+    return ms;
+}
+
+struct timespec microseconds_to_timespec(long long ms) {
+    long long nsec = ms * nsec_in_microseconds;
+    struct timespec spec = {.tv_sec = nsec / nsec_in_sec,
+            .tv_nsec = nsec % nsec_in_sec};
+    return spec;
+}
+
+long long timespec_to_microseconds(struct timespec time) {
+    long long ms = time.tv_sec * microseconds_in_sec;
+    ms += time.tv_nsec / nsec_in_microseconds;
     return ms;
 }
 
@@ -87,11 +106,11 @@ struct coroutine_context {
 
 
 struct coroutine_context *
-create_coroutine_context(char *name, int quantum_soft_limit_ms, struct file_queue *shared_file_queue) {
+create_coroutine_context(char *name, int quantum_soft_limit_microseconds, struct file_queue *shared_file_queue) {
     struct coroutine_context *context = malloc(sizeof(struct coroutine_context));
 
     context->name = name;
-    context->quantum_soft_limit = ms_to_timespec(quantum_soft_limit_ms);
+    context->quantum_soft_limit = microseconds_to_timespec(quantum_soft_limit_microseconds);
     context->shared_file_queue = shared_file_queue;
     struct timespec time_working = {.tv_sec = 0, .tv_nsec = 0};
     context->time_working = time_working;
@@ -256,8 +275,8 @@ coroutine_func_f(void *coroutine_context) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     struct timespec last_diff = diff_timespec(now, context->start_timespec);
     context->time_working = add_timespec(context->time_working, last_diff);
-    printf("coroutine %s finished execution (context switches: %d; ms spent total: %lld)\n", context->name,
-           context->context_switch_count, timespec_to_ms(context->time_working));
+    printf("coroutine %s finished execution (context switches: %d; microseconds spent total: %lld)\n", context->name,
+           context->context_switch_count, timespec_to_microseconds(context->time_working));
 
     dispose_of_coroutine_context(coroutine_context);
     return 0;
@@ -295,7 +314,7 @@ void output_merged_sorted_numbers_to_file(const struct file_queue *shared_file_q
 
     struct timespec merge_end;
     clock_gettime(CLOCK_MONOTONIC, &merge_end);
-    printf("total merge time (ms): %lld\n", timespec_to_ms(diff_timespec(merge_end, merge_start)));
+    printf("total merge time (microseconds): %lld\n", timespec_to_microseconds(diff_timespec(merge_end, merge_start)));
 }
 
 int
@@ -310,7 +329,10 @@ main(int argc, char **argv) {
     sscanf(argv[1], "%i", &target_latency);
     int coroutine_count;
     sscanf(argv[2], "%i", &coroutine_count);
-    int quantum = target_latency / coroutine_count;
+    int quantum_soft_limit_microseconds = target_latency / coroutine_count;
+    if (quantum_soft_limit_microseconds == 0) {
+        printf("WARNING: because of chosen target latency and coroutine count, quantum soft limit for a single coroutine is zero, which might lead to undesired behavior in terms of context switch count!\n");
+    }
 
     struct file_queue *shared_file_queue = create_file_queue(
             argc - non_file_name_cli_arguments_count,
@@ -324,18 +346,14 @@ main(int argc, char **argv) {
     for (int i = 0; i < coroutine_count; ++i) {
         char name[16];
         sprintf(name, "coro_%d", i);
-        struct coroutine_context *coroutine_context = create_coroutine_context(strdup(name), quantum,
+        struct coroutine_context *coroutine_context = create_coroutine_context(strdup(name),
+                                                                               quantum_soft_limit_microseconds,
                                                                                shared_file_queue);
         coro_new(coroutine_func_f, coroutine_context);
     }
     /* Wait for all the coroutines to end. */
     struct coro *c;
     while ((c = coro_sched_wait()) != NULL) {
-        /*
-         * Each 'wait' returns a finished coroutine with which you can
-         * do anything you want. Like check its exit status, for
-         * example. Don't forget to free the coroutine afterwards.
-         */
         printf("Finished %d\n", coro_status(c));
         coro_delete(c);
     }
@@ -349,7 +367,8 @@ main(int argc, char **argv) {
 
     struct timespec program_end;
     clock_gettime(CLOCK_MONOTONIC, &program_end);
-    printf("total work time (ms): %lld\n", timespec_to_ms(diff_timespec(program_end, program_start)));
+    printf("total work time (microseconds): %lld\n",
+           timespec_to_microseconds(diff_timespec(program_end, program_start)));
 
     return 0;
 }

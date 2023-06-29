@@ -4,8 +4,7 @@
 #include <stdbool.h>
 #include "tokenizer.c"
 
-#ifndef INC_UTILS
-#define INC_UTILS
+#ifndef UTILS_INCLUDED
 #include "utils.c"
 #endif
 

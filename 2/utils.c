@@ -1,3 +1,4 @@
+#define UTILS_INCLUDED
 
 #include <malloc.h>
 #include <stdbool.h>
@@ -5,8 +6,12 @@
 
 const int NONE = -1;
 
+typedef struct reader_output {
+    bool ended_with_EOF;
+    char *line;
+} reader_output;
 
-char *read_stdin_line() {
+reader_output read_stdin_line() {
     int str_size = 1;
     int str_ptr = 0;
     char *str = malloc(sizeof(char) * (str_size + 1));
@@ -14,7 +19,12 @@ char *read_stdin_line() {
     // TODO: allow escaped newlines for multi-line input
     // bool next_char_escaping = false;
     char ch;
-    while ((ch = (char) getchar()) != EOF && (ch != '\n')) {
+    bool ended_with_EOF = false;
+    while ((ch = (char) getchar()) != '\n') {
+        if (ch == EOF) {
+            ended_with_EOF = true;
+            break;
+        }
         if (str_ptr == str_size) {
             str_size *= 2;
             char *new_str = malloc(sizeof(char) * (1 + str_size));
@@ -29,7 +39,7 @@ char *read_stdin_line() {
 
     }
 
-    return str;
+    return (reader_output) {.line=str, .ended_with_EOF = ended_with_EOF};
 }
 
 char *substring(const char *string, int char_count) {

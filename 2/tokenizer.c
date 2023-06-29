@@ -3,8 +3,7 @@
 #include <string.h>
 #include <stdbool.h>
 
-#ifndef INC_UTILS
-#define INC_UTILS
+#ifndef UTILS_INCLUDED
 
 #include "utils.c"
 

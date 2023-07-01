@@ -12,15 +12,18 @@ typedef struct reader_output {
 } reader_output;
 
 reader_output read_stdin_line() {
+    bool next_char_escaping = false;
+    bool ended_with_EOF = false;
+    const char NONE = 'a';
+    char used_quote_symbol = NONE;
+
     int str_size = 1;
     int str_ptr = 0;
     char *str = malloc(sizeof(char) * (str_size + 1));
-    str[0] = '\0';
-    // TODO: allow escaped newlines for multi-line input
-    // bool next_char_escaping = false;
+    str[str_ptr] = '\0';
+
     char ch;
-    bool ended_with_EOF = false;
-    while ((ch = (char) getchar()) != '\n') {
+    while ((ch = (char) getchar()) != '\n' || next_char_escaping || (used_quote_symbol != NONE)) {
         if (ch == EOF) {
             ended_with_EOF = true;
             break;
@@ -32,6 +35,36 @@ reader_output read_stdin_line() {
             free(str);
             str = new_str;
         }
+
+        switch (ch){
+            case '\\':
+                next_char_escaping = !next_char_escaping;
+
+                break;
+            case '\n':
+                if (next_char_escaping){
+                    str[--str_ptr] = '\0';
+                    next_char_escaping = false;
+                    continue;
+                }
+                break;
+            case '\'':
+            case '"':
+                if (!next_char_escaping){
+                    if (used_quote_symbol == ch){
+                        used_quote_symbol = NONE;
+                    }else if (used_quote_symbol == NONE){
+                        used_quote_symbol = ch;
+                    }
+                }
+
+                next_char_escaping = false;
+                break;
+            default:
+                next_char_escaping = false;
+                break;
+        }
+
 
         str[str_ptr] = ch;
         str_ptr++;

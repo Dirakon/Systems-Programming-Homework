@@ -29,7 +29,7 @@ reader_output read_stdin_line() {
             break;
         }
         if (str_ptr == str_size) {
-            str_size *= 2;
+            str_size *= 10;
             char *new_str = malloc(sizeof(char) * (1 + str_size));
             strcpy(new_str, str);
             free(str);

@@ -15,7 +15,7 @@ typedef struct token_list {
     struct token_list *other_tokens;
 } token_list;
 
-token_list *get_tokens(const char *string);
+token_list *get_tokens(char *string);
 
 int
 get_closing_quote_index(const char *string, int quotation_inside_start_inclusive, char used_quote_symbol) {
@@ -84,7 +84,12 @@ extract_quoted_token(const char *string, int quotation_inside_start_inclusive, i
     return quoted_token;
 }
 
-token_list *extract_tokens_starting_from_quoted_literal(const char *string, int opening_quote_index, char quote_symbol) {
+typedef struct token_list_and_unparsed_tokens_ptr {
+    token_list *list;
+    char *maybe_unparsed_tokens_ptr;
+} token_list_and_unparsed_tokens_ptr;
+
+token_list_and_unparsed_tokens_ptr extract_quoted_literal(char *string, int opening_quote_index, char quote_symbol) {
     /*
      NOTE: for now, one situation is not handled properly:
      1: quoted literals not separated by space
@@ -102,12 +107,13 @@ token_list *extract_tokens_starting_from_quoted_literal(const char *string, int 
     char *quoted_token = extract_quoted_token(string, first_char_index, closing_quote_index, quote_symbol);
 
     // Supposedly, real Bash auto-closes unclosed quotations, so we consider null-terminator quote-closer too
-    token_list *others_tokens = string[closing_quote_index] == '\0' ? NULL : get_tokens(
+    char *others_token_ptr = string[closing_quote_index] == '\0' ? NULL : (
             string + closing_quote_index + 1);
 
     token_list *tokens_starting_from_classified = malloc(sizeof(token_list));
-    *tokens_starting_from_classified = (token_list) {.token = quoted_token, .other_tokens = others_tokens};
-    return tokens_starting_from_classified;
+    *tokens_starting_from_classified = (token_list) {.token = quoted_token, .other_tokens = NULL};
+    return (token_list_and_unparsed_tokens_ptr) {.list=tokens_starting_from_classified,
+            .maybe_unparsed_tokens_ptr=others_token_ptr};
 }
 
 
@@ -129,9 +135,10 @@ prepend_unclassified_token_if_needed(char *string, int non_classified_token_star
     }
 }
 
-token_list *get_tokens(const char *string) {
-    char *new_string = malloc(sizeof(char)* (strlen(string)+1));
-    memset(new_string, '\0', strlen(string)+1);
+token_list_and_unparsed_tokens_ptr get_one_token(char *string) {
+    int new_string_max_length = strlen(string);
+    char *new_string = malloc(sizeof(char) * (new_string_max_length + 1));
+    memset(new_string, '\0', new_string_max_length + 1);
     //TODO: handle non-classified token with escaped whitespaces
     int old_string_ptr = 0;
     int new_string_ptr = 0;
@@ -147,30 +154,40 @@ token_list *get_tokens(const char *string) {
                         token_list *answer = malloc(sizeof(token_list));
                         *answer = (token_list) {.token = substring(new_string + non_classified_token_start,
                                                                    new_string_ptr - non_classified_token_start),
-                                .other_tokens = get_tokens(string + old_string_ptr + 1)};
+                                .other_tokens = NULL};
                         free(new_string);
-                        return answer;
+                        return (token_list_and_unparsed_tokens_ptr) {.list = answer, .maybe_unparsed_tokens_ptr =
+                        string + old_string_ptr + 1};
                     }
                     break;
                 case '\'':
                 case '"': {
-                    token_list *quoted_token_and_following = extract_tokens_starting_from_quoted_literal(string, old_string_ptr, string[old_string_ptr]);
-                    free(new_string);
-                    return prepend_unclassified_token_if_needed(string, non_classified_token_start,
-                                                                quoted_token_and_following, old_string_ptr, false);
+                    token_list_and_unparsed_tokens_ptr ans =
+                            extract_quoted_literal(string, old_string_ptr,
+                                                   string[old_string_ptr]);
+                    token_list *quoted_token = ans.list;
+                    return (token_list_and_unparsed_tokens_ptr) {.list = prepend_unclassified_token_if_needed(
+                            new_string,
+                            non_classified_token_start,
+                            quoted_token,
+                            new_string_ptr,
+                            true),
+                            .maybe_unparsed_tokens_ptr = ans.maybe_unparsed_tokens_ptr
+                    };
                 }
                 case '>':
                 case '&':
                 case '|': {
                     int classified_token_size = string[old_string_ptr + 1] == string[old_string_ptr] ? 2 : 1;
-                    token_list *classified_token_and_following = malloc(sizeof(token_list));
-                    *classified_token_and_following = (token_list) {.token = substring(string + old_string_ptr,
-                                                                                       classified_token_size),
-                            .other_tokens = get_tokens(
-                                    string + old_string_ptr + classified_token_size)};
-                    free(new_string);
-                    return prepend_unclassified_token_if_needed(string, non_classified_token_start,
-                                                                classified_token_and_following, old_string_ptr, false);
+                    token_list *classified_token = malloc(sizeof(token_list));
+                    *classified_token = (token_list) {.token = substring(string + old_string_ptr,
+                                                                         classified_token_size),
+                            .other_tokens = NULL};
+                    char *following_tokens_ptr = string + old_string_ptr + classified_token_size;
+                    return (token_list_and_unparsed_tokens_ptr) {.list =  prepend_unclassified_token_if_needed(
+                            new_string, non_classified_token_start,
+                            classified_token, new_string_ptr,
+                            true), .maybe_unparsed_tokens_ptr=following_tokens_ptr};
 
                 }
                 default:
@@ -179,28 +196,57 @@ token_list *get_tokens(const char *string) {
                     }
                     break;
             }
-        if (string[old_string_ptr] == '\\'){
-            if (char_is_escaped){
+        if (string[old_string_ptr] == '\\') {
+            if (char_is_escaped) {
                 // Save two '\\' as one (one escapes another)
                 new_string[new_string_ptr++] = string[old_string_ptr];
                 char_is_escaped = false;
-            }else{
+            } else {
                 char_is_escaped = true;
             }
-        }else{
+        } else {
             char_is_escaped = false;
             new_string[new_string_ptr++] = string[old_string_ptr];
         }
         old_string_ptr++;
     }
 
-    return prepend_unclassified_token_if_needed(new_string, non_classified_token_start, NULL, new_string_ptr, true);
+    return (token_list_and_unparsed_tokens_ptr) {.list =
+    prepend_unclassified_token_if_needed(new_string, non_classified_token_start, NULL, new_string_ptr, true),
+            .maybe_unparsed_tokens_ptr = NULL};
+}
+
+token_list *get_tokens(char *string) {
+    token_list *start_token = NULL, *current_token = NULL;
+
+    char *current_string_ptr = string;
+    while (current_string_ptr != NULL) {
+        token_list_and_unparsed_tokens_ptr one_token_info = get_one_token(current_string_ptr);
+        current_string_ptr = one_token_info.maybe_unparsed_tokens_ptr;
+        if (start_token == NULL) {
+            start_token = one_token_info.list;
+            current_token = one_token_info.list;
+        } else {
+            current_token->other_tokens = one_token_info.list;
+        }
+        if (current_token != NULL) {
+            while (current_token->other_tokens != NULL)
+                current_token = current_token->other_tokens;
+        }
+
+
+    }
+
+    return start_token;
 }
 
 void dispose_of_tokens(token_list *tokens) {
-    if (tokens == NULL)
-        return;
-    free(tokens->token);
-    dispose_of_tokens(tokens->other_tokens);
-    free(tokens);
+    while (tokens != NULL) {
+        token_list *next_tokens = tokens->other_tokens;
+
+        free(tokens->token);
+        free(tokens);
+
+        tokens = next_tokens;
+    }
 }

@@ -31,14 +31,23 @@ pid_list *add_pid(pid_list *list, int new_pid) {
 }
 
 
-int execute_command(command *this_command) {
+int execute_command(command_array *commands, command *this_command) {
     char **arguments_with_filename = malloc(sizeof(char *) * (2 + (*this_command).argc));
-    arguments_with_filename[0] = (*this_command).name;
+    arguments_with_filename[0] = strdup((*this_command).name);
     for (int i = 0; i < (*this_command).argc; ++i) {
-        arguments_with_filename[i + 1] = (*this_command).argv[i];
+        arguments_with_filename[i + 1] = strdup((*this_command).argv[i]);
     }
     arguments_with_filename[(*this_command).argc + 1] = NULL;
-    execvp((*this_command).name, arguments_with_filename);
+    dispose_of_commands(*commands);
+    execvp(arguments_with_filename[0], arguments_with_filename);
+
+    char** ptr = arguments_with_filename;
+    while ((*ptr) != NULL){
+        free(*ptr);
+        ptr++;
+    }
+    free(arguments_with_filename);
+
     exit(errno);
 }
 
@@ -87,24 +96,24 @@ int main() {
         command_array commands = parse(read_data.line);
         free(read_data.line);
 
-        if (commands.command_count == 0) {
+        int actual_command_count = commands.command_count;
+        if (actual_command_count == 0) {
             dispose_of_commands(commands);
             continue;
         }
-
 
         int last_child_pid = NONE;
         pid_list *children_to_wait_for = NULL;
 
         command first_command = commands.commands[0];
-        if (commands.command_count == 1 && strings_equal(first_command.name, "exit")) {
+        if (actual_command_count == 1 && strings_equal(first_command.name, "exit")) {
             execute_exit_command(&commands, first_command);
-        } else if (commands.command_count == 1 && strings_equal(first_command.name, "cd")) {
+        } else if (actual_command_count == 1 && strings_equal(first_command.name, "cd")) {
             last_child_exit_code = execute_chdir_command(first_command);
         } else {
-            if (strings_equal("&", commands.commands[commands.command_count - 1].name)) {
+            if (strings_equal("&", commands.commands[actual_command_count - 1].name)) {
                 // Subshell will be executing this command set
-                commands.command_count -= 1;
+                actual_command_count -= 1;
                 const int FORK_CHILD = 0;
                 if ((last_child_pid = fork()) == FORK_CHILD) {
                     // child will finish this command set
@@ -125,7 +134,7 @@ int main() {
             int command_count_without_redirection = get_command_count_before_redirection(&commands);
             char *last_operator = NULL;
             while (true) {
-                if (command_array_ptr == commands.command_count)
+                if (command_array_ptr == actual_command_count)
                     break;
                 if (is_operator(commands.commands[command_array_ptr].name)) {
                     last_operator = commands.commands[command_array_ptr].name;
@@ -151,7 +160,6 @@ int main() {
                         } else {
                             last_child_exit_code = 0;
                         }
-                        //  printf("KILLED EM!\n");
                     }
                     if (strings_equal(last_operator, "||")) {
                         if (!last_child_exit_code) {
@@ -191,17 +199,18 @@ int main() {
                     close(fd[1]);  // Close the duplicated write end of the pipe
                     close(fd[0]);  // Close the unused read end of the pipe
                     command this_command = commands.commands[command_array_ptr];
+                    dispose_of_pid_list(children_to_wait_for);
+                    children_to_wait_for = NULL;
                     if (strings_equal(this_command.name, "exit")) {
-                        dispose_of_pid_list(children_to_wait_for);
                         execute_exit_command(&commands, this_command);
                     }
-                    return execute_command(&this_command); // Leads to execvp
+                    return execute_command(&commands,&this_command); // Leads to execvp
                 } else // PARENT
                 {
                     children_to_wait_for = add_pid(children_to_wait_for, last_child_pid);
 
                     close(fd[1]);  // Close the unused write end of the pipe
-                    if (command_array_ptr == commands.command_count - 1) {
+                    if (command_array_ptr == actual_command_count - 1) {
                         // Last command, so we manually output to STDOUT
                         int single_byte;
                         while (read(fd[0], &single_byte, 1) > 0) {
@@ -211,8 +220,8 @@ int main() {
                         break;
                     } else if (command_array_ptr == command_count_without_redirection - 1) {
                         // The child was the last subcommand, so we just output to the file as the redirection says
-                        bool overwrite_file = strings_equal(commands.commands[commands.command_count - 2].name, ">");
-                        char *file_to_write = commands.commands[commands.command_count - 1].name;
+                        bool overwrite_file = strings_equal(commands.commands[actual_command_count - 2].name, ">");
+                        char *file_to_write = commands.commands[actual_command_count - 1].name;
                         FILE *file = fopen(file_to_write, overwrite_file ? "w" : "a");
                         int file_descriptor = fileno(file);
 

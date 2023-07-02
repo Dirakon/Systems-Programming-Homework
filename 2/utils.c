@@ -14,8 +14,8 @@ typedef struct reader_output {
 reader_output read_stdin_line() {
     bool next_char_escaping = false;
     bool ended_with_EOF = false;
-    const char NONE = 'a';
-    char used_quote_symbol = NONE;
+    const char NO_QUOTES_USED = 'a';
+    char used_quote_symbol = NO_QUOTES_USED;
 
     int str_size = 1;
     int str_ptr = 0;
@@ -23,7 +23,7 @@ reader_output read_stdin_line() {
     str[str_ptr] = '\0';
 
     char ch;
-    while ((ch = (char) getchar()) != '\n' || next_char_escaping || (used_quote_symbol != NONE)) {
+    while ((ch = (char) getchar()) != '\n' || next_char_escaping || (used_quote_symbol != NO_QUOTES_USED)) {
         if (ch == EOF) {
             ended_with_EOF = true;
             break;
@@ -52,8 +52,8 @@ reader_output read_stdin_line() {
             case '"':
                 if (!next_char_escaping) {
                     if (used_quote_symbol == ch) {
-                        used_quote_symbol = NONE;
-                    } else if (used_quote_symbol == NONE) {
+                        used_quote_symbol = NO_QUOTES_USED;
+                    } else if (used_quote_symbol == NO_QUOTES_USED) {
                         used_quote_symbol = ch;
                     }
                 }

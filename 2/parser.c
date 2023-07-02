@@ -28,7 +28,9 @@ typedef struct command_list {
 
 
 bool is_operator(char *string) {
+    // Cheap but working version:
     return string[0] == '&' || string[0] == '|' || string[0] == '>';
+    // Actual implementation:
 //    return strings_equal(string, "&") || strings_equal(string, "&&")
 //           || strings_equal(string, "|") || strings_equal(string, "||")
 //           || strings_equal(string, ">") || strings_equal(string, ">>");
@@ -82,24 +84,6 @@ command_list *convert_tokens_without_disposal(token_list *all_tokens) {
     }
 
     return previous_command;
-//    if (all_tokens == NULL)
-//        return NULL;
-//
-//    char *command = strdup(all_tokens->token);
-//    bool has_arguments = !is_operator(command);
-//    int argument_count = has_arguments ? count_tokens_until_operator_or_end(all_tokens->other_tokens, 0) : 0;
-//    char **argv = malloc(sizeof(char *) * argument_count);
-//
-//    token_list *ptr = all_tokens->other_tokens;
-//    for (int argument_ptr = 0; argument_ptr < argument_count; ++argument_ptr, ptr = ptr->other_tokens) {
-//        argv[argument_ptr] = strdup(ptr->token);
-//    }
-//
-//    command_list *command_and_following = malloc(sizeof(command_list));
-//    *command_and_following = (command_list) {.other_commands = convert_tokens_without_disposal(
-//            ptr), .this_command = {.argc = argument_count, .argv = argv, .name = command}};
-//
-//    return command_and_following;
 }
 
 

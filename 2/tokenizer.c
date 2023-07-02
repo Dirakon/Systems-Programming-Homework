@@ -37,7 +37,8 @@ get_closing_quote_index(const char *string, int quotation_inside_start_inclusive
 }
 
 char *
-extract_quoted_token(const char *string, int quotation_inside_start_inclusive, int quotation_inside_end_exclusive, char quote_symbol) {
+extract_quoted_token(const char *string, int quotation_inside_start_inclusive, int quotation_inside_end_exclusive,
+                     char quote_symbol) {
     int quotation_insides_max_size = quotation_inside_end_exclusive - quotation_inside_start_inclusive;
     char *quoted_token = malloc(sizeof(char) * (quotation_insides_max_size + 1));
     int quoted_token_ptr = 0;
@@ -57,15 +58,9 @@ extract_quoted_token(const char *string, int quotation_inside_start_inclusive, i
                 char this_char = string[j];
                 if (next_char_is_escaped) {
                     switch (this_char) {
-                        case 'n':
-                            this_char = '\n';
-                            break;
-                        case 't':
-                            this_char = '\t';
-                            break;
                         case '"':
                         case '\'':
-                            if (this_char != quote_symbol){
+                            if (this_char != quote_symbol) {
                                 quoted_token[quoted_token_ptr++] = '\\';
                             }
                             break;
@@ -103,7 +98,7 @@ token_list_and_unparsed_tokens_ptr extract_quoted_literal(char *string, int open
    */
     int first_char_index = opening_quote_index + 1;
     int closing_quote_index = get_closing_quote_index(string, first_char_index, quote_symbol);
-    //printf("quote detected: %d-%d(starting with '%c')\n",first_char_index,closing_quote_index, string[first_char_index]);
+
     char *quoted_token = extract_quoted_token(string, first_char_index, closing_quote_index, quote_symbol);
 
     // Supposedly, real Bash auto-closes unclosed quotations, so we consider null-terminator quote-closer too

@@ -5,10 +5,30 @@
 #include "parser.c"
 
 
-
 #ifndef UTILS_INCLUDED
 #include "utils.c"
 #endif
+
+
+typedef struct pid_list {
+    int pid;
+    struct pid_list *other_pids;
+} pid_list;
+
+void dispose_of_pid_list(pid_list *list) {
+    pid_list *ptr = list;
+    while (ptr != NULL) {
+        pid_list *next = ptr->other_pids;
+        free(ptr);
+        ptr = next;
+    }
+}
+
+pid_list *add_pid(pid_list *list, int new_pid) {
+    pid_list *answer = malloc(sizeof(pid_list));
+    *answer = (pid_list) {.other_pids = list, .pid = new_pid};
+    return answer;
+}
 
 
 int execute_command(command *this_command) {
@@ -67,13 +87,14 @@ int main() {
         command_array commands = parse(read_data.line);
         free(read_data.line);
 
-        if (commands.command_count == 0){
+        if (commands.command_count == 0) {
             dispose_of_commands(commands);
             continue;
         }
 
 
         int last_child_pid = NONE;
+        pid_list *children_to_wait_for = NULL;
 
         command first_command = commands.commands[0];
         if (commands.command_count == 1 && strings_equal(first_command.name, "exit")) {
@@ -81,20 +102,83 @@ int main() {
         } else if (commands.command_count == 1 && strings_equal(first_command.name, "cd")) {
             last_child_exit_code = execute_chdir_command(first_command);
         } else {
+            if (strings_equal("&", commands.commands[commands.command_count - 1].name)) {
+                // Subshell will be executing this command set
+                commands.command_count -= 1;
+                const int FORK_CHILD = 0;
+                if ((last_child_pid = fork()) == FORK_CHILD) {
+                    // child will finish this command set
+                    fclose(stdin);
+
+                } else {
+                    // we will proceed
+                    dispose_of_commands(commands);
+                    continue;
+                }
+            }
+
+
             int command_array_ptr = 0;
             int last_pipe_end = NONE;
 
             // NOTE: currently only support one redirect and exactly at the end of command chain
             int command_count_without_redirection = get_command_count_before_redirection(&commands);
-
+            char *last_operator = NULL;
             while (true) {
-                if (strings_equal(commands.commands[command_array_ptr].name, "|")) {
+                if (command_array_ptr == commands.command_count)
+                    break;
+                if (is_operator(commands.commands[command_array_ptr].name)) {
+                    last_operator = commands.commands[command_array_ptr].name;
                     command_array_ptr++;
                     continue;
                 }
+
+                if (last_operator != NULL && !strings_equal(last_operator, "|")) {
+                    // OR or AND
+                    if (last_pipe_end != NONE) {
+                        int status;
+                        int single_byte;
+                        while (read(last_pipe_end, &single_byte, 1) > 0) {
+                            write(STDOUT_FILENO, &single_byte, 1);
+                        }
+                        close(last_pipe_end);  // Close the read end of the pipe
+                        last_pipe_end = NONE;
+
+                        waitpid(last_child_pid, &status, 0);
+                        if (WIFEXITED(status)) {
+                            int es = WEXITSTATUS(status);
+                            last_child_exit_code = es;
+                        } else {
+                            last_child_exit_code = 0;
+                        }
+                        //  printf("KILLED EM!\n");
+                    }
+                    if (strings_equal(last_operator, "||")) {
+                        if (!last_child_exit_code) {
+                            command_array_ptr++;
+                            continue;
+                        }
+                    } else {//&&
+                        if (last_child_exit_code) {
+                            command_array_ptr++;
+                            continue;
+                        }
+                    }
+                    last_operator = NULL;
+
+                }
+
+                if (command_array_ptr != 0 && last_pipe_end == NONE && last_operator != NULL &&
+                    strings_equal("|", last_operator)) {
+                    command_array_ptr++;
+                    last_operator = NULL;
+                    continue;
+                }
+
                 int fd[2];
                 pipe(fd);
                 const int FORK_CHILD = 0;
+
                 if ((last_child_pid = fork()) == FORK_CHILD) {
                     if (last_pipe_end != NONE) {
                         // Take the last cmd's output as STDIN
@@ -107,12 +191,15 @@ int main() {
                     close(fd[1]);  // Close the duplicated write end of the pipe
                     close(fd[0]);  // Close the unused read end of the pipe
                     command this_command = commands.commands[command_array_ptr];
-                    if (strings_equal(this_command.name,"exit")){
-                        execute_exit_command(&commands,this_command);
+                    if (strings_equal(this_command.name, "exit")) {
+                        dispose_of_pid_list(children_to_wait_for);
+                        execute_exit_command(&commands, this_command);
                     }
                     return execute_command(&this_command); // Leads to execvp
                 } else // PARENT
                 {
+                    children_to_wait_for = add_pid(children_to_wait_for, last_child_pid);
+
                     close(fd[1]);  // Close the unused write end of the pipe
                     if (command_array_ptr == commands.command_count - 1) {
                         // Last command, so we manually output to STDOUT
@@ -122,8 +209,7 @@ int main() {
                         }
                         close(fd[0]);  // Close the read end of the pipe
                         break;
-                    }
-                    else if (command_array_ptr == command_count_without_redirection - 1) {
+                    } else if (command_array_ptr == command_count_without_redirection - 1) {
                         // The child was the last subcommand, so we just output to the file as the redirection says
                         bool overwrite_file = strings_equal(commands.commands[commands.command_count - 2].name, ">");
                         char *file_to_write = commands.commands[commands.command_count - 1].name;
@@ -140,31 +226,36 @@ int main() {
                     }
 
                 }
-                if (last_pipe_end != NONE){
+                if (last_pipe_end != NONE) {
                     close(last_pipe_end);
                 }
+                last_operator = NULL;
                 last_pipe_end = fd[0];
                 command_array_ptr++;
             }
-            if (last_pipe_end != NONE){
+            if (last_pipe_end != NONE) {
                 close(last_pipe_end);
             }
         }
 
         // Wait for children to terminate
         int status = 0;
-        int wpid;
-        while ((wpid = wait(&status)) > 0){
-            if (wpid == last_child_pid){
-                if ( WIFEXITED(status) ) {
+        pid_list *ptr = children_to_wait_for;
+        while (ptr != NULL) {
+            int pid_to_wait_this_turn = ptr->pid;
+
+            waitpid(pid_to_wait_this_turn, &status, 0);
+            if (pid_to_wait_this_turn == last_child_pid) {
+                if (WIFEXITED(status)) {
                     int es = WEXITSTATUS(status);
                     last_child_exit_code = es;
-                }else{
+                } else {
                     last_child_exit_code = 0;
                 }
-
             }
+            ptr = ptr->other_pids;
         }
+        dispose_of_pid_list(children_to_wait_for);
 
         dispose_of_commands(commands);
 

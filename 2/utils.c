@@ -36,13 +36,13 @@ reader_output read_stdin_line() {
             str = new_str;
         }
 
-        switch (ch){
+        switch (ch) {
             case '\\':
                 next_char_escaping = !next_char_escaping;
 
                 break;
             case '\n':
-                if (next_char_escaping){
+                if (next_char_escaping) {
                     str[--str_ptr] = '\0';
                     next_char_escaping = false;
                     continue;
@@ -50,10 +50,10 @@ reader_output read_stdin_line() {
                 break;
             case '\'':
             case '"':
-                if (!next_char_escaping){
-                    if (used_quote_symbol == ch){
+                if (!next_char_escaping) {
+                    if (used_quote_symbol == ch) {
                         used_quote_symbol = NONE;
-                    }else if (used_quote_symbol == NONE){
+                    } else if (used_quote_symbol == NONE) {
                         used_quote_symbol = ch;
                     }
                 }

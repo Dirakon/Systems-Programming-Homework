@@ -1,7 +1,7 @@
 #include <unistd.h>
-#include <wait.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 #include "parser.c"
 
 

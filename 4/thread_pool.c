@@ -3,6 +3,9 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <asm-generic/errno.h>
 
 const int SUCCESS = 0;
 const int NONE = -1;
@@ -260,14 +263,86 @@ void thread_task_join_no_lock(struct thread_task* task){
 
 #ifdef NEED_TIMED_JOIN
 
+//struct timeout_args{
+//    double timeout_seconds;
+//    bool has_timeout_happened;
+//    pthread_mutex_t* lock;
+//    pthread_cond_t* cond;
+//};
+//
+//void* timeout_job(void* arg){
+//    struct timeout_args* timeout_args = (struct timeout_args*)arg;
+//    usleep(timeout_args->timeout_time);
+//
+//    return NULL;
+//}
+
+const long nsec_in_sec = 1000000000;
+
+const long nsec_in_millisecond = 1000000;
+const long milliseconds_in_sec = 1000;
+
+const long nsec_in_microsecond = 1000;
+const long microseconds_in_sec = 1000000;
+
+struct timespec add_timespec(const struct timespec spec1,
+                             const struct timespec spec2) {
+    struct timespec addition = {.tv_sec = spec1.tv_sec + spec2.tv_sec,
+            .tv_nsec = spec1.tv_nsec + spec2.tv_nsec};
+    if (addition.tv_nsec >= nsec_in_sec) {
+        addition.tv_nsec -= nsec_in_sec;
+        addition.tv_sec++;
+    }
+    return addition;
+}
+
+struct timespec milliseconds_to_timespec(long long ms) {
+    long long nsec = ms * nsec_in_millisecond;
+    struct timespec spec = {.tv_sec = nsec / nsec_in_sec,
+            .tv_nsec = nsec % nsec_in_sec};
+    return spec;
+}
+
+struct timespec now_as_timespec() {
+    struct timespec ans;
+
+    // Calculate the absolute timeout time
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    ans.tv_sec = now.tv_sec;
+    ans.tv_nsec = now.tv_usec * nsec_in_microsecond;
+    return ans;
+}
 int
 thread_task_timed_join(struct thread_task *task, double timeout, void **result)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)task;
-    (void)timeout;
-    (void)result;
-    return TPOOL_ERR_NOT_IMPLEMENTED;
+    if (task->parent_pool == NULL)
+        return TPOOL_ERR_TASK_NOT_PUSHED;
+    struct thread_pool* parent_pool = task->parent_pool;
+    pthread_mutex_lock(&parent_pool->lock);
+
+    while (!task->finished) {
+        struct timespec timeout_spec = add_timespec(
+                now_as_timespec(),
+                milliseconds_to_timespec((long long)(timeout * (double)milliseconds_in_sec)));
+
+        if (ETIMEDOUT == pthread_cond_timedwait(&task->has_just_finished_cond, &parent_pool->lock, &timeout_spec)){
+            pthread_mutex_unlock(&parent_pool->lock);
+            return TPOOL_ERR_TIMEOUT;
+        }
+    }
+
+    swap_tasks_in_pool(task,  parent_pool->tasks[parent_pool->pushed_tasks_count - 1]);
+    parent_pool->pushed_tasks_count--;
+
+    task->parent_pool = NULL;
+    task->index_in_parent_pool = NONE;
+    task->assigned = false;
+
+    *result = task->result;
+    pthread_mutex_unlock(&parent_pool->lock);
+
+    return SUCCESS;
 }
 
 #endif

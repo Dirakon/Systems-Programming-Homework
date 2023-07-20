@@ -14,6 +14,7 @@ struct thread_task {
 
     bool finished;
     bool assigned;
+    bool scheduled_for_deletion;
 
     // lock not needed since now we use pool's mutex for everything
     // pthread_mutex_t lock;
@@ -51,6 +52,8 @@ void swap_tasks_in_pool(struct thread_task *task1, struct thread_task *task2) {
     task1->index_in_parent_pool = index2;
 }
 
+void thread_task_join_no_lock(struct thread_task* task);
+
 void *execute_thread(void *arg) {
     struct thread_pool *pool = (struct thread_pool *) arg;
 
@@ -68,11 +71,7 @@ void *execute_thread(void *arg) {
 
 
         struct thread_task *task_to_execute = pool->tasks[0];
-        //printf("iteration count: %d!\n", it_count++);
-//        for (int i = 0; i < pool->pushed_tasks_count; ++i) {
-//            if (!pool->tasks[i]->assigned)
-//                task_to_execute = pool->tasks[i];
-//        }
+
         pool->unassigned_tasks_count--;
         swap_tasks_in_pool(task_to_execute, pool->tasks[pool->unassigned_tasks_count]);
 
@@ -87,6 +86,12 @@ void *execute_thread(void *arg) {
         pool->running_tasks_count--;
         pthread_cond_broadcast(&task_to_execute->has_just_finished_cond);
         task_to_execute->finished = true;
+
+        if (task_to_execute->scheduled_for_deletion){
+            thread_task_join_no_lock(task_to_execute);
+            thread_task_delete(task_to_execute);
+        }
+
         pthread_mutex_unlock(&pool->lock);
     }
 }
@@ -128,17 +133,6 @@ int thread_pool_delete(struct thread_pool *pool) {
         pthread_mutex_unlock(&pool->lock);
         return TPOOL_ERR_HAS_TASKS;
     }
-
-    // Wait for all threads to finished assigned tasks [redundant since we know that all is finished already]:
-//    while (pool->unassigned_tasks_count + pool->running_tasks_count != 0){
-//        struct thread_task* unfinished_task = NULL;
-//        for (int i = 0; i < pool->pushed_tasks_count; ++i){
-//            if (!pool->tasks[i]->finished)
-//                unfinished_task = pool->tasks[i];
-//        }
-//        while (!unfinished_task->finished)
-//            pthread_cond_wait(&unfinished_task->has_just_finished_cond, &pool->lock);
-//    }
 
     pool->thread_update_event = TASKS_ENDED_EVENT;
     pthread_cond_broadcast(&pool->thread_update_cond);
@@ -196,6 +190,7 @@ int thread_task_new(struct thread_task **task, thread_task_f function, void *arg
             .function = function,
             .arg = arg,
             .finished = false,
+            .scheduled_for_deletion = false,
             .assigned = false,
             .parent_pool = NULL,
             .index_in_parent_pool = NONE
@@ -236,24 +231,30 @@ int thread_task_join(struct thread_task *task, void **result) {
         return TPOOL_ERR_TASK_NOT_PUSHED;
 
     pthread_mutex_lock(&parent_pool->lock);
+
+    thread_task_join_no_lock(task);
+    *result = task->result;
+
+    pthread_mutex_unlock(&parent_pool->lock);
+    return SUCCESS;
+}
+
+void thread_task_join_no_lock(struct thread_task* task){
+    struct thread_pool* parent_pool = task->parent_pool;
     while (!task->finished) {
         //printf("Waiting on finish.\n");
         pthread_cond_wait(&task->has_just_finished_cond, &parent_pool->lock);
         // printf("Finish received\n");
     }
 
-    *result = task->result;
     swap_tasks_in_pool(task,  parent_pool->tasks[parent_pool->pushed_tasks_count - 1]);
     parent_pool->pushed_tasks_count--;
-    pthread_mutex_unlock(&parent_pool->lock);
 
     task->parent_pool = NULL;
     task->index_in_parent_pool = NONE;
     task->assigned = false;
     // Do not reset finish because we want to indicate the special state of this task. TODO: maybe resetting is right?
     // task->finished = false;
-
-    return SUCCESS;
 }
 
 
@@ -286,9 +287,20 @@ int thread_task_delete(struct thread_task *task) {
 int
 thread_task_detach(struct thread_task *task)
 {
-    /* IMPLEMENT THIS FUNCTION */
-    (void)task;
-    return TPOOL_ERR_NOT_IMPLEMENTED;
+    if (task->parent_pool == NULL)
+        return TPOOL_ERR_TASK_NOT_PUSHED;
+    struct thread_pool* parent_pool = task->parent_pool;
+
+    pthread_mutex_lock(&parent_pool->lock);
+    if (task->finished){
+        thread_task_join_no_lock(task);
+        thread_task_delete(task);
+    }else {
+        task->scheduled_for_deletion = true;
+    }
+    pthread_mutex_unlock(&parent_pool->lock);
+
+    return SUCCESS;
 }
 
 #endif

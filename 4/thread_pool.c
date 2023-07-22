@@ -55,7 +55,7 @@ void swap_tasks_in_pool(struct thread_task *task1, struct thread_task *task2) {
     task1->index_in_parent_pool = index2;
 }
 
-void thread_task_join_no_lock(struct thread_task* task);
+void thread_task_join_no_lock(struct thread_task *task);
 
 void *execute_thread(void *arg) {
     struct thread_pool *pool = (struct thread_pool *) arg;
@@ -63,9 +63,9 @@ void *execute_thread(void *arg) {
     while (true) {
         pthread_mutex_lock(&pool->lock);
         while (pool->unassigned_tasks_count == 0) {
-            //printf("Waiting on update.\n");
+
             pthread_cond_wait(&pool->thread_update_cond, &pool->lock);
-            //printf("Update received.\n");
+
             if (pool->thread_update_event == TASKS_ENDED_EVENT) {
                 pthread_mutex_unlock(&pool->lock);
                 return NULL;
@@ -90,7 +90,7 @@ void *execute_thread(void *arg) {
         pthread_cond_broadcast(&task_to_execute->has_just_finished_cond);
         task_to_execute->finished = true;
 
-        if (task_to_execute->scheduled_for_deletion){
+        if (task_to_execute->scheduled_for_deletion) {
             thread_task_join_no_lock(task_to_execute);
             thread_task_delete(task_to_execute);
         }
@@ -142,7 +142,7 @@ int thread_pool_delete(struct thread_pool *pool) {
 
     pthread_mutex_unlock(&pool->lock);
 
-    for (int i = 0; i < pool->thread_count; ++i){
+    for (int i = 0; i < pool->thread_count; ++i) {
         pthread_join(pool->threads[i], NULL);
     }
 
@@ -171,7 +171,7 @@ int thread_pool_push_task(struct thread_pool *pool, struct thread_task *task) {
     pool->tasks[pool->pushed_tasks_count++] = task;
     task->index_in_parent_pool = pool->pushed_tasks_count - 1;
     pool->unassigned_tasks_count++;
-    if (pool->running_tasks_count == pool->thread_count && pool->thread_count != pool->max_thread_count - 1) {
+    if (pool->running_tasks_count == pool->thread_count && pool->thread_count < pool->max_thread_count) {
         // Create new thread
         pthread_create(&pool->threads[pool->thread_count++], NULL, execute_thread, pool);
     } else {
@@ -227,8 +227,6 @@ bool thread_task_is_running(const struct thread_task *task) {
 }
 
 int thread_task_join(struct thread_task *task, void **result) {
-    // TODO: check if parent pool checks have to have their own lock? dunno. What happens if parent pool is assigned or unassigned
-    // right when we check for this?
     struct thread_pool *parent_pool = task->parent_pool;
     if (parent_pool == NULL)
         return TPOOL_ERR_TASK_NOT_PUSHED;
@@ -242,40 +240,22 @@ int thread_task_join(struct thread_task *task, void **result) {
     return SUCCESS;
 }
 
-void thread_task_join_no_lock(struct thread_task* task){
-    struct thread_pool* parent_pool = task->parent_pool;
+void thread_task_join_no_lock(struct thread_task *task) {
+    struct thread_pool *parent_pool = task->parent_pool;
     while (!task->finished) {
-        //printf("Waiting on finish.\n");
         pthread_cond_wait(&task->has_just_finished_cond, &parent_pool->lock);
-        // printf("Finish received\n");
     }
 
-    swap_tasks_in_pool(task,  parent_pool->tasks[parent_pool->pushed_tasks_count - 1]);
+    swap_tasks_in_pool(task, parent_pool->tasks[parent_pool->pushed_tasks_count - 1]);
     parent_pool->pushed_tasks_count--;
 
     task->parent_pool = NULL;
     task->index_in_parent_pool = NONE;
     task->assigned = false;
-    // Do not reset finish because we want to indicate the special state of this task. TODO: maybe resetting is right?
-    // task->finished = false;
 }
 
 
 #ifdef NEED_TIMED_JOIN
-
-//struct timeout_args{
-//    double timeout_seconds;
-//    bool has_timeout_happened;
-//    pthread_mutex_t* lock;
-//    pthread_cond_t* cond;
-//};
-//
-//void* timeout_job(void* arg){
-//    struct timeout_args* timeout_args = (struct timeout_args*)arg;
-//    usleep(timeout_args->timeout_time);
-//
-//    return NULL;
-//}
 
 const long nsec_in_sec = 1000000000;
 
@@ -306,33 +286,32 @@ struct timespec milliseconds_to_timespec(long long ms) {
 struct timespec now_as_timespec() {
     struct timespec ans;
 
-    // Calculate the absolute timeout time
     struct timeval now;
     gettimeofday(&now, NULL);
     ans.tv_sec = now.tv_sec;
     ans.tv_nsec = now.tv_usec * nsec_in_microsecond;
     return ans;
 }
+
 int
-thread_task_timed_join(struct thread_task *task, double timeout, void **result)
-{
+thread_task_timed_join(struct thread_task *task, double timeout, void **result) {
     if (task->parent_pool == NULL)
         return TPOOL_ERR_TASK_NOT_PUSHED;
-    struct thread_pool* parent_pool = task->parent_pool;
+    struct thread_pool *parent_pool = task->parent_pool;
     pthread_mutex_lock(&parent_pool->lock);
 
-    while (!task->finished) {
-        struct timespec timeout_spec = add_timespec(
-                now_as_timespec(),
-                milliseconds_to_timespec((long long)(timeout * (double)milliseconds_in_sec)));
+    struct timespec timeout_spec = add_timespec(
+            now_as_timespec(),
+            milliseconds_to_timespec((long long) (timeout * (double) milliseconds_in_sec)));
 
-        if (ETIMEDOUT == pthread_cond_timedwait(&task->has_just_finished_cond, &parent_pool->lock, &timeout_spec)){
+    while (!task->finished) {
+        if (ETIMEDOUT == pthread_cond_timedwait(&task->has_just_finished_cond, &parent_pool->lock, &timeout_spec)) {
             pthread_mutex_unlock(&parent_pool->lock);
             return TPOOL_ERR_TIMEOUT;
         }
     }
 
-    swap_tasks_in_pool(task,  parent_pool->tasks[parent_pool->pushed_tasks_count - 1]);
+    swap_tasks_in_pool(task, parent_pool->tasks[parent_pool->pushed_tasks_count - 1]);
     parent_pool->pushed_tasks_count--;
 
     task->parent_pool = NULL;
@@ -360,17 +339,16 @@ int thread_task_delete(struct thread_task *task) {
 #ifdef NEED_DETACH
 
 int
-thread_task_detach(struct thread_task *task)
-{
+thread_task_detach(struct thread_task *task) {
     if (task->parent_pool == NULL)
         return TPOOL_ERR_TASK_NOT_PUSHED;
-    struct thread_pool* parent_pool = task->parent_pool;
+    struct thread_pool *parent_pool = task->parent_pool;
 
     pthread_mutex_lock(&parent_pool->lock);
-    if (task->finished){
+    if (task->finished) {
         thread_task_join_no_lock(task);
         thread_task_delete(task);
-    }else {
+    } else {
         task->scheduled_for_deletion = true;
     }
     pthread_mutex_unlock(&parent_pool->lock);
